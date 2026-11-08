@@ -372,7 +372,7 @@ window.__ModuleLoader__.load({
                     parts.length
                       ? h("div", {
                           style: S.bparts,
-                          title: parts.map(function (p) { return (p.part || "?") + "：" + p.name; }).join("\\n"),
+                          title: parts.map(function (p) { return (p.part || "?") + "：" + p.name; }).join("\n"),
                         }, parts.map(function (p) {
                           return (p.part || "?") + " " + (typeof p.gb === "number" ? p.gb.toFixed(2) : "?");
                         }).join(" + "))
