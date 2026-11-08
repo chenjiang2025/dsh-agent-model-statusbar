@@ -12,7 +12,7 @@
 // 我在这基础上多两步：
 //   1. detached:true + unref() —— ComfyUI 连 DSH 重启都不跟着死。
 //      （静息/在跑是【用户的】决定，不该被一次 DSH 重启悄悄改掉）
-//   2. stdout/stderr 落盘到 <ComfyUI 日志目录>\\ —— 起不来时能看原因，不是抓瞎。
+//   2. stdout/stderr 落盘到 <ComfyUI 日志目录>\ —— 起不来时能看原因，不是抓瞎。
 //      ★ 但仍然不 pipe：不读的管道写满之后会把子进程卡死（comfyui-panel 踩过，注释原话）。
 //
 // ── 探测不在这里重写 ──────────────────────────────────────────
@@ -25,9 +25,19 @@ import { spawn, execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync } from 'node:fs'
 import { join, dirname, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-agent-model-statusbar'
 export const inject = ['tools', 'webServer']
+
+/**
+ * 插件配置 = 插件管理页里那张配置卡片（由 Plugins manager 渲染）。
+ * ★ 这里每加一个字段，管理页就多一行；不写 description 的那行会很难懂。
+ */
+export const Config = z.object({
+  showCard: z.boolean().default(true)
+    .description('在侧边栏左下角显示「本地模型」卡片。关掉后界面完全不画它，状态探测与空闲自动静息照常运行。'),
+})
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PROBE_PS1 = join(HERE, 'probe.ps1')
@@ -49,10 +59,10 @@ const STATE_FILE = resolveHere(ENV('STATUSBAR_STATE')) || join(HERE, 'statusbar-
 // 候选理由：② 是 ComfyUI 自己的默认监听地址/端口，不是某台机器的值 —— 没改端口的人换机器仍然对。
 // 接受三种写法：`host`、`host:port`、`http://host:port`（README 示例是 host:port 形态）。
 function parseComfyHost(raw) {
-  const s = String(raw || '').trim().replace(/\\/+$/, '')
+  const s = String(raw || '').trim().replace(/\/+$/, '')
   if (!s) return { host: '127.0.0.1', port: 8188, base: 'http://127.0.0.1:8188', raw: '' }
   try {
-    const u = new URL(/^https?:\\/\\//i.test(s) ? s : 'http://' + s)
+    const u = new URL(/^https?:\/\//i.test(s) ? s : 'http://' + s)
     const port = Number(u.port || (u.protocol === 'https:' ? 443 : 8188)) || 8188
     const host = u.hostname || '127.0.0.1'
     return { host, port, base: `${u.protocol}//${host}:${port}`, raw: s }
@@ -84,7 +94,7 @@ const COMFY_PY = ENV('COMFYUI_PY') || firstExistingFile([
   COMFY_DIR ? join(COMFY_DIR, 'venv', 'Scripts', 'python.exe') : '',
 ])
 
-// 日志目录：① COMFYUI_LOG_DIR → ② <COMFYUI_DIR>\\logs → ③ <插件目录>\\logs。
+// 日志目录：① COMFYUI_LOG_DIR → ② <COMFYUI_DIR>\logs → ③ <插件目录>\logs。
 // 候选理由：日志是这个插件拉起的进程的产物，② 让日志和 ComfyUI 放在一起便于对照；
 // ③ 是「没配安装目录」时唯一仍然合法、且一定可写的位置。
 const LOG_DIR = ENV('COMFYUI_LOG_DIR')
@@ -200,7 +210,7 @@ function normalize(raw) {
   }
 }
 
-// ── 静息/运行的状态记忆 ──────────────────────────────────────
+// ── 静息/运行的状态记忆 ────────────────────────────────────────
 // ComfyUI 自己的 API 没有「模型还在不在」这一问，所以自己记：最后一次动作是 idle 还是 start。
 // ★ 落盘而不是只放内存：DSH 一重启内存标记就没了，而 ComfyUI 还活着（detached）。
 function loadState() {
@@ -258,7 +268,7 @@ async function getState(force = false) {
   return st
 }
 
-// ── ComfyUI 直连小工具 ────────────────────────────────────
+// ── ComfyUI 直连小工具 ────────────────────────────────────────
 async function comfyUp(timeoutMs = 2500) {
   try {
     const r = await fetch(`${BASE}/system_stats`, { signal: AbortSignal.timeout(timeoutMs) })
@@ -309,7 +319,7 @@ function portOwnerPids(port) {
       { timeout: 20000, windowsHide: true },
       (e, so) => {
         const pids = String(so || '')
-          .split(/\\s+/)
+          .split(/\s+/)
           .map((s) => parseInt(s, 10))
           .filter((n) => Number.isFinite(n) && n > 0)
         resolve([...new Set(pids)])
@@ -318,7 +328,7 @@ function portOwnerPids(port) {
   })
 }
 
-// ── 四个动作 ─────────────────────────────────────────────
+// ── 四个动作 ─────────────────────────────────────────────────
 async function doStart() {
   if (await comfyUp()) {
     saveState({ phase: 'running', note: 'already' })
@@ -342,7 +352,7 @@ async function doStart() {
   mkdirSync(LOG_DIR, { recursive: true })
   const logPath = join(LOG_DIR, `statusbar-comfy-${new Date().toISOString().slice(0, 10)}.log`)
   const fd = openSync(logPath, 'a')
-  const banner = `\\n===== dsh-agent-model-statusbar spawn ${new Date().toISOString()} =====\\n`
+  const banner = `\n===== dsh-agent-model-statusbar spawn ${new Date().toISOString()} =====\n`
   try { writeFileSync(logPath, banner, { flag: 'a' }) } catch { /* 日志写不进去也照常启动 */ }
 
   let spawned
@@ -475,8 +485,8 @@ async function doStatus() {
   }
 }
 
-// ── 空闲自动静息 ───────────────────────────────────────────
-// 需求：「十分钟没有任何出图动作就自动放掉显存，
+// ── 空闲自动静息 ─────────────────────────────────────────────
+// 需求（需求）：「十分钟没有任何出图动作就自动放掉显存，
 // 你下次出图时它自己读回来（多花三十几秒）」。
 //
 // ★★「空闲」必须有依据，不能靠计时器拍脑袋。三条证据，缺一不可：
@@ -648,7 +658,7 @@ async function act(action) {
   return doStatus()
 }
 
-// ── HTTP 小工具 ──────────────────────────────────────────
+// ── HTTP 小工具 ──────────────────────────────────────────────
 function json(res, code, body) {
   const s = JSON.stringify(body)
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -673,21 +683,34 @@ function readBody(req, limit = 256 * 1024) {
   })
 }
 
-// ── 插件主体 ─────────────────────────────────────────────
-export function apply(ctx) {
+// ── 插件主体 ─────────────────────────────────────────────────
+/** 配置卡片的值 → 一个普通对象（Schemastery 的字段可能是 ref，.get() 才拿得到当前值）。 */
+function readUiConfig(config) {
+  const read = (field, fallback) => {
+    const ref = config?.[field]
+    const value = ref !== undefined && typeof ref.get === 'function' ? ref.get() : ref
+    return value === undefined || value === null ? fallback : value
+  }
+  return { showCard: read('showCard', true) !== false }
+}
+
+export function apply(ctx, config) {
+  // ★ 每读一次配置都走 live 取值，管理页改了立即生效，不用重启
+  const uiNow = () => readUiConfig(config)
   const route = ctx.webServer.register({
     kind: 'prefix',
     path: ROUTE,
     handler: async (req, res) => {
       // 这里只是解析本插件的请求路径，和 ComfyUI 地址无关 —— 别拿 COMFY_PORT 当 URL 基
       const url = new URL(req.url, 'http://127.0.0.1')
-      const p = url.pathname.replace(/^\\/model-statusbar/, '') || '/'
+      const p = url.pathname.replace(/^\/model-statusbar/, '') || '/'
       try {
         // 状态栏开局只要这一个请求
         if (p === '/api/state' || p === '/') {
           const st = await getState(false)
           // autoIdle 不跟着 probe 缓存走 —— 它每次都要是新的（要能看出自动静息在不在工作）
-          return json(res, 200, { ok: !st.probeError, ...st, autoIdle: idleAutoPublic() })
+          // ui 也是现取：管理页关掉卡片后，刷新页面就没了
+          return json(res, 200, { ok: !st.probeError, ...st, autoIdle: idleAutoPublic(), ui: uiNow() })
         }
         if (p === '/api/action' && req.method === 'POST') {
           const body = await readBody(req)
