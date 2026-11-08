@@ -13,7 +13,7 @@
 //   stub，照样能把「组件渲染出哪些字」验掉。绝不因为环境找不到 react 就跳过这一段。
 //
 // 用法：
-//   node .\\selftest.mjs
+//   node .\selftest.mjs
 // 退出码 0 = 全通；非 0 = 有断言没过。
 
 import { readFileSync } from 'node:fs'
@@ -32,7 +32,7 @@ function ok(name, cond, extra) {
 }
 
 // ── A. 宿主半：真起 HTTP 服务，真发请求 ────────────────────────
-console.log('\\n=== A. 宿主半 HTTP 路由（真起服务、真发请求）===')
+console.log('\n=== A. 宿主半 HTTP 路由（真起服务、真发请求）===')
 const host = await import(pathToFileURL(join(HERE, 'index.js')).href)
 let routeDef = null
 const tools = []
@@ -71,6 +71,9 @@ ok('  · autoIdle 是对象，带 enabled / thresholdMinutes',
   !!st.json && !!st.json.autoIdle && typeof st.json.autoIdle === 'object' &&
   typeof st.json.autoIdle.enabled === 'boolean' && typeof st.json.autoIdle.thresholdMinutes === 'number',
   st.json && st.json.autoIdle && (st.json.autoIdle.enabled + ' / ' + st.json.autoIdle.thresholdMinutes + ' 分钟'))
+ok('  · 带 ui.showCard（管理页配置回声）',
+  !!st.json && !!st.json.ui && typeof st.json.ui.showCard === 'boolean',
+  st.json && st.json.ui && String(st.json.ui.showCard))
 
 const act = await getJSON('/api/action', {
   method: 'POST',
@@ -105,7 +108,7 @@ ok('output.render 返回 ContentBlock[]', Array.isArray(blocks) && blocks[0] && 
 srv.close()
 
 // ── B. 浏览器半：vm 加载 + 渲染 ───────────────────────────────
-console.log('\\n=== B. 浏览器半（vm 造 __ModuleLoader__ + 渲染）===')
+console.log('\n=== B. 浏览器半（vm 造 __ModuleLoader__ + 渲染）===')
 
 // pnpm 的严格布局下，从 profile 根 require('react') 会 MODULE_NOT_FOUND。
 // 换几个 anchor 找真 react；找不到就用自建 stub，不跳过这一段。
@@ -154,7 +157,7 @@ if (!react) {
   }
   stub = {
     // preset：按 useState 的出现顺序预置初值，用来把组件渲染成「展开态」。
-    // ★ 组件里的顺序是 0=data 1=error 2=working 3=opened 4=listOpen 5=msg 6=bundleOpen 7=hidden
+    // ★ 组件里的顺序是 0=data 1=error 2=working 3=opened 4=listOpen 5=msg 6=bundleOpen 7=pos
     //   —— 改了要同步改这里。新 state 只能加在【末尾】：下面的 preset 是按索引给的，
     //   中间插一个会把后面全部错位。
     reset(p) { preset = p || {}; slots = []; cursor = 0 },
@@ -224,7 +227,7 @@ try { folded = render(null) } catch (e) { foldedErr = String((e && e.message) ||
 ok('折叠态渲染成功', folded.length > 0, folded.length ? folded.length + ' chars' : foldedErr)
 ok('折叠态含「本地模型」', folded.includes('本地模型'))
 ok('折叠态含展开提示「▴」', folded.includes('▴'))
-if (folded) console.log('\\n折叠态（默认）:\\n' + folded)
+if (folded) console.log('\n折叠态（默认）:\n' + folded)
 
 // ── 展开态：靠预置第 4 个 useState（opened = true）拿到 ────────
 if (stub) {
@@ -235,7 +238,7 @@ if (stub) {
   for (const kw of ['本地模型', 'ComfyUI', '显存', '拉起', '静息', '关闭', '刷新']) {
     ok('展开态含「' + kw + '」', expanded.includes(kw))
   }
-  if (expanded) console.log('\\n展开态:\\n' + expanded)
+  if (expanded) console.log('\n展开态:\n' + expanded)
 
   // ── 两个清单都展开：验「底模 / 组合」确实是分两组，且组合的三件套渲染得出来 ──
   const fakeData = {
@@ -252,6 +255,7 @@ if (stub) {
       ],
     }],
     autoIdle: { enabled: true, thresholdMinutes: 10 },
+    ui: { showCard: true },
   }
   let lists = ''
   let listsErr = ''
@@ -264,21 +268,22 @@ if (stub) {
   // ★「分两组」的证明：只展开「底模」时，组合模型的名字不该出现
   const ckOnly = render({ 0: fakeData, 3: true, 4: true, 6: false })
   ok('「底模」那一组里不含组合模型的名字', !ckOnly.includes('Qwen-Image 2.1 Turbo'))
-  if (lists) console.log('\\n清单态（底模 + 组合，两组）:\\n' + lists)
+  if (lists) console.log('\n清单态（底模 + 组合，两组）:\n' + lists)
 
-  // ── 隐藏态（state[7] = hidden）：整张卡都不该渲染任何文字 ──
-  //   只留一个没有文字的小圆点把手，所以「一个字都没有」正是这个态的断言。
+  // ── 管理页关掉卡片：data.ui.showCard === false 时一个字都不该渲染 ──
   let hid = ''
   let hidErr = ''
-  try { hid = render({ 3: true, 7: true }) } catch (e) { hidErr = String((e && e.message) || e) }
-  ok('隐藏态渲染成功', hidErr === '', hidErr || ('"' + hid + '"'))
-  ok('隐藏态一个字的正文都不留', hid.trim() === '', JSON.stringify(hid))
+  try { hid = render({ 0: Object.assign({}, fakeData, { ui: { showCard: false } }), 3: true }) } catch (e) { hidErr = String((e && e.message) || e) }
+  ok('配置关掉后渲染不崩', hidErr === '', hidErr || ('"' + hid + '"'))
+  ok('配置关掉后一个字都不渲染', hid.trim() === '', JSON.stringify(hid))
+  const shown = render({ 0: Object.assign({}, fakeData, { ui: { showCard: true } }), 3: true })
+  ok('配置开着时照常渲染', shown.includes('本地模型'))
 } else {
   console.log('  · 展开态：拿到的是真 react，无法从外部设 state —— 这一态留到浏览器里验')
 }
 
 // ── 汇总 ─────────────────────────────────────────────────────
-console.log('\\n' + (fails === 0
+console.log('\n' + (fails === 0
   ? '✓✓ 全通 —— 宿主半路由 + 浏览器半渲染都实测走过，可以重启装载'
   : '✗ 有 ' + fails + ' 条没过'))
 process.exit(fails === 0 ? 0 : 1)

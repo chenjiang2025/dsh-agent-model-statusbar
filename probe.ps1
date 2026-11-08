@@ -77,7 +77,7 @@ foreach ($b in $bundleDefs) {
 #   specified", leaving gpu = $null. Quoting each argument is what actually works.
 $g = & nvidia-smi '--query-gpu=name,memory.used,memory.total,utilization.gpu' '--format=csv,noheader,nounits' 2>$null
 if ($g) {
-  $p = $g -split ',\\s*'
+  $p = $g -split ',\s*'
   $out.gpu = [ordered]@{ name = $p[0]; usedMiB = [int]$p[1]; totalMiB = [int]$p[2]; utilPct = [int]$p[3] }
 } else { $out.gpu = $null }
 
