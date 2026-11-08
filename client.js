@@ -31,26 +31,27 @@ window.__ModuleLoader__.load({
 
     var API = "/model-statusbar/api";
 
-    // ── 隐藏/恢复 ────────────────────────────────────────────────
-    // 有些人不想让这张卡常驻，但又不想为此停用整个插件（那样电源控制也跟着没了）。
-    // 所以给一个「×」：点一下整张卡消失，状态记在 localStorage；
-    // 左下角原位留一个 14px 的极淡小圆点当把手 —— 点它恢复。
-    // ★ 不能在隐藏后什么都不留：不留恢复入口，就等于只能卸载插件才能回来。
-    var HIDE_KEY = "dsh-agent-model-statusbar:hidden";
+    // ── 拖动位置 ────────────────────────────────────────────────
+    // 位置是【布局】，不是显示设置，所以记在 localStorage；「显不显示」在插件管理页（Config.showCard）。
+    // ★ 只在展开态的标题行拖：折叠那一行整条都是「点一下展开」，再抢它的 mousedown 会打架。
+    var POS_KEY = "dsh-agent-model-statusbar:pos";
 
-    function readHidden() {
+    function readPos() {
       try {
-        if (typeof window === "undefined" || !window.localStorage) return false;
-        return window.localStorage.getItem(HIDE_KEY) === "1";
-      } catch (e) { return false; }
+        if (typeof window === "undefined" || !window.localStorage) return null;
+        var s = window.localStorage.getItem(POS_KEY);
+        if (!s) return null;
+        var o = JSON.parse(s);
+        if (o && typeof o.x === "number" && typeof o.y === "number") return o;
+      } catch (e) { /* 坏数据当没有 */ }
+      return null;
     }
 
-    function writeHidden(v) {
+    function writePos(o) {
       try {
-        if (typeof window === "undefined" || !window.localStorage) return;
-        if (v) window.localStorage.setItem(HIDE_KEY, "1");
-        else window.localStorage.removeItem(HIDE_KEY);
-      } catch (e) { /* 隐私模式/禁用存储：只影响记忆，不影响本次会话 */ }
+        if (typeof window === "undefined" || !window.localStorage || !o) return;
+        window.localStorage.setItem(POS_KEY, JSON.stringify(o));
+      } catch (e) { /* 隐私模式：只影响下次还记不记得位置 */ }
     }
 
     // 中性灰描边 + inherit 文字色 —— 浅色/深色主题都不用改（照 comfyui-panel 的做法）
@@ -110,6 +111,12 @@ window.__ModuleLoader__.load({
       },
     };
 
+    // 拖过的位置优先；没拖过就还是左下角那个默认位
+    function dockStyle(p) {
+      if (!p) return S.dock;
+      return Object.assign({}, S.dock, { left: p.x + "px", top: p.y + "px", bottom: "auto" });
+    }
+
     var PHASE = {
       running: { text: "运行中", color: "#3ec46d" },
       idle: { text: "已静息", color: "#e0a83c" },
@@ -150,8 +157,9 @@ window.__ModuleLoader__.load({
       // ★ 组合模型清单是否展开。加在【最后】—— 前面 6 个的顺序不能动：
       //   selftest.mjs 的 stub 按 useState 出现顺序预置初值（那边也写着同一句提醒）。
       var bd = react.useState(false);
-      // ★ 第 8 个 state（索引 7）。和上面一样：只能加在末尾，中间插一个会错位。
-      var hd = react.useState(readHidden);
+      // ★ 拖动位置（索引 7）。同样只能加在末尾。
+      var ps = react.useState(readPos);
+      var dockRef = react.useRef(null);
 
       var data = st[0], setData = st[1];
       var error = er[0], setError = er[1];
@@ -160,9 +168,28 @@ window.__ModuleLoader__.load({
       var listOpen = li[0], setListOpen = li[1];
       var msg = nt[0], setMsg = nt[1];
       var bundleOpen = bd[0], setBundleOpen = bd[1];
-      var hidden = hd[0], setHidden = hd[1];
+      var pos = ps[0], setPos = ps[1];
 
-      function setHide(v) { setHidden(v); writeHidden(v); }
+      // 按住标题行拖。不调 preventDefault —— 按钮都在别的行，不冲突。
+      function onDragStart(e) {
+        if (e.button !== 0 || !dockRef.current || typeof window === "undefined") return;
+        var r = dockRef.current.getBoundingClientRect();
+        var dx = e.clientX - r.left;
+        var dy = e.clientY - r.top;
+        function mv(ev) {
+          setPos({
+            x: Math.max(0, Math.min(ev.clientX - dx, window.innerWidth - 40)),
+            y: Math.max(0, Math.min(ev.clientY - dy, window.innerHeight - 30)),
+          });
+        }
+        function up() {
+          window.removeEventListener("mousemove", mv);
+          window.removeEventListener("mouseup", up);
+          setPos(function (p) { writePos(p); return p; });
+        }
+        window.addEventListener("mousemove", mv);
+        window.addEventListener("mouseup", up);
+      }
 
       react.useEffect(function () {
         var dead = false;
@@ -227,25 +254,15 @@ window.__ModuleLoader__.load({
       var apiUp = !!(data && data.comfyui && data.comfyui.apiUp);
       var vram = gpu ? fmtMiB(gpu.usedMiB) : "—";
 
-      // ── 隐藏态：只剩一个几乎看不见的小圆点 ──────────────────
-      //   注意：这里不拉状态、不轮询 —— 隐藏时连 /api/state 都别打，
-      //   反正没人看（effect 里的轮询不会因为渲染分支而停，但白跑的代价很小，不改）。
-      if (hidden) {
-        return h("div", { style: S.dock, "data-dsh-agent-model-statusbar": "hidden" },
-          h("button", {
-            type: "button",
-            style: S.handle,
-            title: "本地模型面板已隐藏 · 点一下恢复",
-            "data-sb-show": "1",
-            onClick: function () { setHide(false); },
-            onMouseEnter: function (e) { e.currentTarget.style.opacity = 0.85; },
-            onMouseLeave: function (e) { e.currentTarget.style.opacity = 0.35; },
-          }));
-      }
+      // ── 管理页关掉了这张卡 → 一个字都不画 ──────────────────
+      //   ★ 开关在「插件管理页 → dsh-agent-model-statusbar」的配置卡片里（Config.showCard），
+      //     不是卡片上的按钮 —— 一张卡片自己是藏不掉自己的，藏掉了也就没法点回来。
+      //   ★ 只影响绘制：状态探测、空闲自动静息照常跑。
+      if (data && data.ui && data.ui.showCard === false) return null;
 
       // ── 折叠态：一行，只报状态 + 显存 ──────────────────────
       if (!opened) {
-        return h("div", { style: S.dock, "data-dsh-agent-model-statusbar": "1" },
+        return h("div", { ref: dockRef, style: dockStyle(pos), "data-dsh-agent-model-statusbar": "1" },
           h("div", {
             style: S.pill,
             title: "本地模型（ComfyUI）—— 点一下展开控制按钮",
@@ -259,9 +276,13 @@ window.__ModuleLoader__.load({
       }
 
       // ── 展开态 ────────────────────────────────────────────
-      return h("div", { style: S.dock, "data-dsh-agent-model-statusbar": "1" },
+      return h("div", { ref: dockRef, style: dockStyle(pos), "data-dsh-agent-model-statusbar": "1" },
         h("div", { style: S.card },
-          h("div", { style: S.head },
+          h("div", {
+            style: Object.assign({}, S.head, { cursor: "grab", userSelect: "none" }),
+            title: "按住这里可以把卡片拖到别处（位置会记住）",
+            onMouseDown: onDragStart,
+          },
             h("span", { style: S.title }, "本地模型"),
             h("span", { style: { display: "flex", alignItems: "center", gap: "5px", flex: "0 0 auto" } },
               dot(meta.color, phase === "running"),
@@ -270,11 +291,7 @@ window.__ModuleLoader__.load({
                 type: "button", style: S.ghost, title: "收起", "data-sb-collapse": "1",
                 onClick: function () { setOpened(false); },
               }, "▾"),
-              h("button", {
-                type: "button", style: S.ghost, title: "隐藏这张卡（左下角小圆点可点回来）",
-                "data-sb-hide": "1",
-                onClick: function () { setHide(true); },
-              }, "×"))),
+              )),
 
           h("div", { style: S.line },
             h("span", { style: S.dim },
@@ -355,7 +372,7 @@ window.__ModuleLoader__.load({
                     parts.length
                       ? h("div", {
                           style: S.bparts,
-                          title: parts.map(function (p) { return (p.part || "?") + "：" + p.name; }).join("\n"),
+                          title: parts.map(function (p) { return (p.part || "?") + "：" + p.name; }).join("\\n"),
                         }, parts.map(function (p) {
                           return (p.part || "?") + " " + (typeof p.gb === "number" ? p.gb.toFixed(2) : "?");
                         }).join(" + "))
